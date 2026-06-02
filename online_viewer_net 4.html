@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>The Great Gatsby: The Watcher</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; touch-action: none; }
+        body {
+            background-color: #030408;
+            color: #ffffff;
+            font-family: 'Times New Roman', Times, serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+        #wrapper { width: 100%; max-width: 800px; padding: 10px; }
+        canvas {
+            display: block;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 4 / 3;
+            border: 3px solid #dfb75c;
+            border-radius: 6px;
+            box-shadow: 0 0 40px rgba(223, 183, 92, 0.4), inset 0 0 20px rgba(0,0,0,0.8);
+            background-color: #010204;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="wrapper">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
+
+    <script>
+    window.addEventListener('load', function() {
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let audioCtx = null;
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            startArrangement();
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            try {
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                if (type === 'jump') {
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(320, audioCtx.currentTime + 0.15);
+                    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+                } else if (type === 'coin') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); 
+                    osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); 
+                    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+                } else if (type === 'hurt') {
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+                    osc.frequency.linearRampToValueAtTime(30, audioCtx.currentTime + 0.3);
+                    gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+                } else if (type === 'intermission') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(220, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.8);
+                    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.8);
+                }
+            } catch(e) {}
+        }
+
+        function startArrangement() {
+            let notes = [220.00, 261.63, 329.63, 392.00, 220.00, 261.63, 329.63, 440.00]; 
+            let step = 0;
+            setInterval(() => {
+                if (!audioCtx || (currentScreen !== "PLAYING" && currentScreen !== "TRUE_ENDING")) return;
+                try {
+                    let osc = audioCtx.createOscillator();
+                    let gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    
+                    
+                    let freq = notes[step % notes.length];
+                    if (currentScreen === "TRUE_ENDING") freq *= 0.5;
+
+                    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+                    step++;
+                } catch(e) {}
+            }, 500);
+        }
+
+      
+        const GRAVITY = 0.45; 
+        const WALK_SPEED = 3.2; 
+        const JUMP_POWER = -9.8; 
+        const MAX_ENERGY = 100;
+
+       
+        let currentScreen = "START"; 
+        let activeLevel = 0;
+        let wealthScore = 0;
+        let energyReserve = MAX_ENERGY;
+        let lives = 3;
+        let runtimeFrames = 0;
+        let idleFrames = 0;
+        let intermissionTimer = 0;
+        let endScreenFrames = 0;
+        let touchControlsActive = false;
+
+        let keys = { left: false, right: false, up: false };
+        let touchLeft = false, touchRight = false, touchJump = false;
+        let padLeft = { x: 30, y: 490, w: 80, h: 70 };
+        let padRight = { x: 130, y: 490, w: 80, h: 70 };
+        let padJump = { x: 680, y: 480, w: 90, h: 80 };
+
+        let player = { x: 0, y: 0, w: 22, h: 46, vx: 0, vy: 0, onGround: false };
+
+        let particles = Array.from({length: 40}, () => ({
+            x: Math.random() * 800, y: Math.random() * 600,
+            size: Math.random() * 2 + 1, speed: Math.random() * 0.5 + 0.2
+        }));
+
+    
+        let levels = [
+            {
+                name: "Chapter I: The Valley of Ashes",
+                hint: "The eyes are always watching. They see it all.",
+                skyTop: "#0a0d14", skyBot: "#1f2433", ground: "#282d3b", trim: "#566175",
+                spawn: { x: 50, y: 440 },
+                platforms: [
+                    { x: 0, y: 530, w: 260, h: 70 },
+                    { x: 320, y: 450, w: 140, h: 20 },
+                    { x: 140, y: 360, w: 120, h: 20 },
+                    { x: 340, y: 270, w: 140, h: 20 },
+                    { x: 540, y: 190, w: 110, h: 20 },
+                    { x: 700, y: 140, w: 100, h: 460 }
+                ],
+                hazards: [
+                    { x: 360, y: 310, w: 14, h: 50, vy: 1.5, minY: 290, maxY: 440, vx: 0 },
+                    { x: 180, y: 200, w: 14, h: 50, vy: -1.5, minY: 140, maxY: 340, vx: 0 }
+                ],
+                items: [
+                    { x: 380, y: 400, active: true },
+                    { x: 180, y: 310, active: true },
+                    { x: 580, y: 140, active: true }
+                ],
+                goal: { x: 740, y: 90 },
+                quote: "Gatsby believed in the green light, the orgastic future that year by year recedes before us..."
+            },
+            {
+                name: "Chapter II: The West Egg Gala",
+                hint: "Climb the grand staircase. The path is stable if you pace yourself.",
+                skyTop: "#12091c", skyBot: "#2b1b40", ground: "#423213", trim: "#d4a544",
+                spawn: { x: 40, y: 460 },
+                platforms: [
+                    { x: 0, y: 540, w: 160, h: 60 },
+                    { x: 220, y: 460, w: 120, h: 20 },
+                    { x: 60, y: 360, w: 120, h: 20 },
+                    { x: 260, y: 280, w: 120, h: 20 },
+                    { x: 460, y: 210, w: 120, h: 20 },
+                    { x: 660, y: 140, w: 140, h: 20 } 
+                ],
+                hazards: [
+                    { x: 280, y: 300, w: 12, h: 140, type: "gate", timing: 160 },
+                    { x: 120, y: 200, w: 12, h: 140, type: "gate", timing: 160 }
+                ],
+                items: [
+                    { x: 280, y: 420, active: true },
+                    { x: 120, y: 320, active: true },
+                    { x: 320, y: 240, active: true },
+                    { x: 520, y: 170, active: true }
+                ],
+                goal: { x: 730, y: 90 },
+                quote: "His house had never seemed so cluttered and dark to him as during the long hours when he awaited her presence..."
+            },
+            {
+                name: "Chapter III: The Buchanan Pier Dock",
+                hint: "Time your dashes past the old money security gates.",
+                skyTop: "#010a06", skyBot: "#081f14", ground: "#0f2e21", trim: "#1d8c5f",
+                spawn: { x: 40, y: 100 },
+                platforms: [
+                    { x: 0, y: 180, w: 100, h: 420 },
+                    { x: 170, y: 240, w: 100, h: 20 },
+                    { x: 340, y: 300, w: 100, h: 20 },
+                    { x: 510, y: 360, w: 100, h: 20 },
+                    { x: 680, y: 420, w: 120, h: 180 }
+                ],
+                hazards: [
+                    { x: 135, y: 0, w: 12, h: 260, type: "gate", timing: 140 },
+                    { x: 305, y: 0, w: 12, h: 320, type: "gate", timing: 160 },
+                    { x: 475, y: 0, w: 12, h: 380, type: "gate", timing: 180 }
+                ],
+                items: [
+                    { x: 210, y: 190, active: true },
+                    { x: 380, y: 250, active: true },
+                    { x: 550, y: 310, active: true }
+                ],
+                goal: { x: 740, y: 370 },
+                quote: "" 
+            }
+        ];
+
+        function loadMapIndex(idx) {
+            activeLevel = idx;
+            let data = levels[activeLevel];
+            player.x = data.spawn.x;
+            player.y = data.spawn.y;
+            player.vx = 0; player.vy = 0;
+            player.onGround = false;
+            energyReserve = MAX_ENERGY;
+        }
+
+        function detectAABB(r1, r2) {
+            return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y;
+        }
+
+        
+        function renderEckleburgEyes(ctx, playerX, playerY) {
+            let cx1 = canvas.width / 2 - 70; 
+            let cx2 = canvas.width / 2 + 70;
+            let cy = 120; 
+            let radius = 35; 
+
+            ctx.save();
+            ctx.globalAlpha = 0.20; 
+
+           
+            ctx.strokeStyle = "#ffd700";
+            ctx.lineWidth = 10;
+            ctx.beginPath();
+            ctx.arc(cx1, cy, radius + 8, 0, Math.PI * 2);
+            ctx.arc(cx2, cy, radius + 8, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.fillStyle = "#ffffff";
+            ctx.beginPath();
+            ctx.arc(cx1, cy, radius, 0, Math.PI * 2);
+            ctx.arc(cx2, cy, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+          
+            let maxTravel = 15;
+            let angle1 = Math.atan2((playerY + 20) - cy, (playerX + 10) - cx1);
+            let angle2 = Math.atan2((playerY + 20) - cy, (playerX + 10) - cx2);
+            
+            let p1x = cx1 + Math.cos(angle1) * maxTravel;
+            let p1y = cy + Math.sin(angle1) * maxTravel;
+            let p2x = cx2 + Math.cos(angle2) * maxTravel;
+            let p2y = cy + Math.sin(angle2) * maxTravel;
+
+     
+            ctx.fillStyle = "#0055ff";
+            ctx.beginPath();
+            ctx.arc(p1x, p1y, 14, 0, Math.PI * 2);
+            ctx.arc(p2x, p2y, 14, 0, Math.PI * 2);
+            ctx.fill();
+
+          
+            ctx.fillStyle = "#000000";
+            ctx.beginPath();
+            ctx.arc(p1x, p1y, 6, 0, Math.PI * 2);
+            ctx.arc(p2x, p2y, 6, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function renderGatsbySprite(ctx, x, y, width, height, frame, dir) {
+            ctx.fillStyle = "#f4b2c1"; 
+            ctx.fillRect(x + 2, y + 14, width - 4, height - 26); 
+            ctx.fillRect(dir > 0 ? x + width - 6 : x, y + 16, 6, 14); 
+            
+            ctx.fillStyle = "#ffd0b3"; 
+            ctx.fillRect(x + 5, y + 2, width - 10, 12); 
+            
+            ctx.fillStyle = "#ffdd6b"; 
+            ctx.fillRect(x + 5, y, width - 10, 5);
+
+            ctx.fillStyle = "#ffffff"; 
+            ctx.fillRect(x + 7, y + 14, width - 14, 4);
+            ctx.fillStyle = "#6b8eff"; 
+            ctx.fillRect(x + 9, y + 16, 4, 10);
+
+            ctx.fillStyle = "#2b1612"; 
+            let legOffset = (Math.sin(frame * 0.25) > 0) ? 3 : -3;
+            ctx.fillRect(x + 3, y + height - 12, 6, 12);
+            ctx.fillRect(x + width - 9, y + height - 12, 6, 12);
+        }
+
+        function processTouch(e) {
+            initAudio();
+            touchControlsActive = true;
+            if (currentScreen === "START") { currentScreen = "PLAYING"; return; }
+            if (currentScreen === "GAME_OVER" || currentScreen === "TRUE_ENDING") { resetFullGame(); return; }
+
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = 800 / rect.width;
+            let scaleY = 600 / rect.height;
+
+            touchLeft = false; touchRight = false; touchJump = false;
+
+            for (let i = 0; i < e.touches.length; i++) {
+                let t = e.touches[i];
+                let tx = (t.clientX - rect.left) * scaleX;
+                let ty = (t.clientY - rect.top) * scaleY;
+
+                if (tx >= padLeft.x && tx <= padLeft.x + padLeft.w && ty >= padLeft.y && ty <= padLeft.y + padLeft.h) touchLeft = true;
+                if (tx >= padRight.x && tx <= padRight.x + padRight.w && ty >= padRight.y && ty <= padRight.y + padRight.h) touchRight = true;
+                if (tx >= padJump.x && tx <= padJump.x + padJump.w && ty >= padJump.y && ty <= padJump.y + padJump.h) touchJump = true;
+            }
+        }
+
+        function handleHardwareDamage() {
+            lives--;
+            playSound('hurt');
+            if (lives <= 0) {
+                currentScreen = "GAME_OVER";
+            } else {
+                loadMapIndex(activeLevel);
+            }
+        }
+
+        function resetFullGame() {
+            lives = 3; wealthScore = 0;
+            currentScreen = "START";
+            endScreenFrames = 0;
+            for(let i=0; i<levels.length; i++) {
+                for(let j=0; j<levels[i].items.length; j++) levels[i].items[j].active = true;
+            }
+            loadMapIndex(0);
+        }
+
+        window.addEventListener("keydown", function(e) {
+            initAudio();
+            if (currentScreen === "START") { currentScreen = "PLAYING"; return; }
+            if (currentScreen === "GAME_OVER" || currentScreen === "TRUE_ENDING") { 
+                if (endScreenFrames > 400 || currentScreen === "GAME_OVER") resetFullGame(); 
+                return; 
+            }
+            if (e.code === "KeyA" || e.code === "ArrowLeft") keys.left = true;
+            if (e.code === "KeyD" || e.code === "ArrowRight") keys.right = true;
+            if (e.code === "KeyW" || e.code === "ArrowUp" || e.code === "Space") { e.preventDefault(); keys.up = true; }
+        });
+        window.addEventListener("keyup", function(e) {
+            if (e.code === "KeyA" || e.code === "ArrowLeft") keys.left = false;
+            if (e.code === "KeyD" || e.code === "ArrowRight") keys.right = false;
+            if (e.code === "KeyW" || e.code === "ArrowUp" || e.code === "Space") keys.up = false;
+        });
+
+        canvas.addEventListener("touchstart", function(e) { e.preventDefault(); processTouch(e); }, { passive: false });
+        canvas.addEventListener("touchmove", function(e) { e.preventDefault(); processTouch(e); }, { passive: false });
+        canvas.addEventListener("touchend", function(e) { e.preventDefault(); processTouch(e); }, { passive: false });
+        canvas.addEventListener("mousedown", function() { initAudio(); });
+
+        function loop() {
+            runtimeFrames++;
+            let data = levels[activeLevel];
+
+            if (currentScreen === "PLAYING") {
+                let moveX = 0;
+                if (keys.left || touchLeft) moveX = -1;
+                if (keys.right || touchRight) moveX = 1;
+                let intentJump = (keys.up || touchJump);
+
+                if (energyReserve > 1) {
+                    if (moveX !== 0) {
+                        player.vx = moveX * WALK_SPEED;
+                        energyReserve -= 0.12;
+                        idleFrames = 0;
+                    } else player.vx = 0;
+                    
+                    if (intentJump && player.onGround) {
+                        player.vy = JUMP_POWER;
+                        player.onGround = false;
+                        energyReserve -= 4.0;
+                        idleFrames = 0;
+                        playSound('jump');
+                    }
+                } else player.vx = 0;
+
+                if (moveX === 0 && player.onGround) {
+                    idleFrames++;
+                    if (idleFrames > 10) energyReserve = Math.min(MAX_ENERGY, energyReserve + 0.6);
+                }
+
+                player.vy += GRAVITY;
+                
+                player.x += player.vx;
+                for (let i = 0; i < data.platforms.length; i++) {
+                    let plat = data.platforms[i];
+                    if (detectAABB(player, plat)) {
+                        if (player.vx > 0) player.x = plat.x - player.w;
+                        if (player.vx < 0) player.x = plat.x + plat.w;
+                    }
+                }
+
+                player.y += player.vy;
+                player.onGround = false;
+                for (let i = 0; i < data.platforms.length; i++) {
+                    let plat = data.platforms[i];
+                    if (detectAABB(player, plat)) {
+                        if (player.vy > 0) {
+                            player.y = plat.y - player.h;
+                            player.vy = 0;
+                            player.onGround = true;
+                        } else if (player.vy < 0) {
+                            player.y = plat.y + plat.h;
+                            player.vy = 0;
+                        }
+                    }
+                }
+
+                if (player.y > canvas.height) handleHardwareDamage();
+
+                for (let i = 0; i < data.hazards.length; i++) {
+                    let haz = data.hazards[i];
+                    if (haz.vx !== 0) {
+                        haz.x += haz.vx;
+                        if (haz.x < haz.minX || haz.x > haz.maxX) haz.vx *= -1;
+                    }
+                    if (haz.vy !== 0) {
+                        haz.y += haz.vy;
+                        if (haz.y < haz.minY || haz.y > haz.maxY) haz.vy *= -1;
+                    }
+                    let lethal = true;
+                    if (haz.type === "gate") {
+                        let step = runtimeFrames % haz.timing;
+                        lethal = step < (haz.timing * 0.55);
+                    }
+                    if (lethal && detectAABB(player, haz)) handleHardwareDamage();
+                }
+
+                for (let i = 0; i < data.items.length; i++) {
+                    let gold = data.items[i];
+                    if (gold.active && detectAABB(player, { x: gold.x, y: gold.y, w: 20, h: 20 })) {
+                        gold.active = false;
+                        wealthScore += 500;
+                        playSound('coin');
+                    }
+                }
+
+                let dx = (player.x + player.w / 2) - (data.goal.x + 12);
+                let dy = (player.y + player.h / 2) - (data.goal.y + 12);
+                let targetProximityDistance = Math.sqrt(dx * dx + dy * dy);
+
+                if (targetProximityDistance < 80) { 
+                    playSound('intermission');
+                    if (activeLevel === 2) {
+                        currentScreen = "TRUE_ENDING";
+                        endScreenFrames = 0;
+                    } else {
+                        currentScreen = "NARRATIVE";
+                        intermissionTimer = 360; 
+                    }
+                }
+            } 
+            else if (currentScreen === "NARRATIVE" || currentScreen === "TITLE_CARD") {
+                intermissionTimer--;
+                if (intermissionTimer <= 0) {
+                    if (currentScreen === "NARRATIVE") {
+                        if (activeLevel + 1 < levels.length) {
+                            currentScreen = "TITLE_CARD";
+                            intermissionTimer = 240;
+                            activeLevel++;
+                        }
+                    } else {
+                        currentScreen = "PLAYING";
+                        loadMapIndex(activeLevel);
+                    }
+                }
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (currentScreen === "START") {
+                ctx.fillStyle = "#04060c";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.strokeStyle = "#dfb75c"; ctx.strokeRect(20, 20, canvas.width - 40, canvas.height - 40);
+                
+                ctx.fillStyle = "#dfb75c";
+                ctx.font = "bold 60px 'Times New Roman', serif";
+                ctx.textAlign = "center";
+                ctx.fillText("THE GREEN LIGHT", canvas.width / 2, 220);
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "16px monospace";
+                ctx.fillText("Made By Henry Lindberg & Raymond Davin", canvas.width / 2, 320);
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "16px monospace";
+                ctx.fillText("THE GREAT GATSBY Final Project - Lucas Boline AP LANG & COMP Hr 4", canvas.width / 2, 340);
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "20px monospace";
+                ctx.fillText("Press Any Key to Begin", canvas.width / 2, 420);
+            } 
+            else if (currentScreen === "NARRATIVE") {
+                ctx.fillStyle = "#010204";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#dfb75c";
+                ctx.font = "italic 22px 'Times New Roman', serif";
+                ctx.textAlign = "center";
+                
+                let words = levels[activeLevel].quote.split(' ');
+                let line = '', y = canvas.height/2 - 20;
+                for(let n = 0; n < words.length; n++) {
+                    let testLine = line + words[n] + ' ';
+                    if(ctx.measureText(testLine).width > 600 && n > 0) {
+                        ctx.fillText(line, canvas.width/2, y);
+                        line = words[n] + ' ';
+                        y += 35;
+                    } else {
+                        line = testLine;
+                    }
+                }
+                ctx.fillText(line, canvas.width/2, y);
+                
+                ctx.fillStyle = "rgba(255,255,255,0.4)";
+                ctx.font = "14px monospace";
+                ctx.fillText("[ The green light recedes... ]", canvas.width / 2, y + 80);
+            }
+            else if (currentScreen === "TITLE_CARD") {
+                ctx.fillStyle = "#050812";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#dfb75c";
+                ctx.font = "bold 30px 'Times New Roman', serif";
+                ctx.textAlign = "center";
+                ctx.fillText(levels[activeLevel].name, canvas.width / 2, canvas.height / 2);
+            }
+            else if (currentScreen === "GAME_OVER") {
+                ctx.fillStyle = "#020306";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#dfb75c";
+                ctx.font = "bold 52px 'Times New Roman', serif";
+                ctx.textAlign = "center";
+                ctx.fillText("THE END OF THE ILLUSION", canvas.width / 2, 200);
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "italic 25px 'Times New Roman', serif";
+                ctx.fillText("So we beat on, boats against the current...", canvas.width / 2, 280);
+
+                ctx.fillStyle = "#9ca3af";
+                ctx.font = "26px monospace";
+                ctx.fillText("Final Wealth Amassed: $" + wealthScore, canvas.width / 2, 380);
+                ctx.fillStyle = "#dfb75c";
+                ctx.fillText("PRESS ANY KEY TO RESTART", canvas.width / 2, 460);
+            } 
+            else if (currentScreen === "TRUE_ENDING") {
+                endScreenFrames++;
+
+              
+                ctx.fillStyle = "#010204";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+               
+                ctx.fillStyle = "#020a14";
+                ctx.fillRect(0, 420, canvas.width, 180);
+
+               
+                ctx.fillStyle = "#0c131a";
+                ctx.fillRect(0, 450, 240, 150);
+
+               
+                renderGatsbySprite(ctx, 200, 404, 22, 46, 0, 1);
+
+              
+                let lightX = 700;
+                let lightY = 380;
+                let pulseRadius = 15 + Math.sin(endScreenFrames * 0.05) * 4;
+
+                ctx.save();
+                let glowGrad = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, pulseRadius * 4);
+                glowGrad.addColorStop(0, "rgba(0, 255, 162, 0.8)");
+                glowGrad.addColorStop(0.3, "rgba(0, 255, 162, 0.2)");
+                glowGrad.addColorStop(1, "rgba(0, 255, 162, 0)");
+                
+                ctx.fillStyle = glowGrad;
+                ctx.beginPath();
+                ctx.arc(lightX, lightY, pulseRadius * 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = "#ffffff";
+                ctx.beginPath();
+                ctx.arc(lightX, lightY, pulseRadius / 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+
+                
+                ctx.textAlign = "center";
+                ctx.font = "italic 24px 'Times New Roman', serif";
+
+                let alpha1 = Math.min(1, Math.max(0, (endScreenFrames - 60) / 60));
+                ctx.fillStyle = `rgba(223, 183, 92, ${alpha1})`;
+                ctx.fillText("“He stretched out his arms toward the dark water...”", canvas.width / 2, 160);
+
+                let alpha2 = Math.min(1, Math.max(0, (endScreenFrames - 180) / 60));
+                ctx.fillStyle = `rgba(223, 183, 92, ${alpha2})`;
+                ctx.fillText("“And the green light remained distant.”", canvas.width / 2, 230);
+
+                let alpha3 = Math.min(1, Math.max(0, (endScreenFrames - 300) / 60));
+                ctx.fillStyle = `rgba(223, 183, 92, ${alpha3})`;
+                ctx.fillText("“So we beat on.”", canvas.width / 2, 300);
+
+                if (endScreenFrames > 450) {
+                    ctx.fillStyle = `rgba(156, 163, 175, ${Math.min(1, (endScreenFrames - 450) / 60)})`;
+                    ctx.font = "14px monospace";
+                    ctx.fillText("PRESS ANY KEY TO RETURN", canvas.width / 2, 550);
+                }
+            }
+            else {
+                
+                let bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                bgGrad.addColorStop(0, data.skyTop);
+                bgGrad.addColorStop(1, data.skyBot);
+                ctx.fillStyle = bgGrad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+                particles.forEach(p => {
+                    p.y -= p.speed;
+                    if(p.y < 0) p.y = canvas.height;
+                    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+                });
+
+                
+                renderEckleburgEyes(ctx, player.x, player.y);
+
+                for (let i = 0; i < data.platforms.length; i++) {
+                    let p = data.platforms[i];
+                    ctx.fillStyle = data.ground;
+                    ctx.fillRect(p.x, p.y, p.w, p.h);
+                    ctx.fillStyle = data.trim;
+                    ctx.fillRect(p.x, p.y, p.w, 6);
+                }
+
+                for (let i = 0; i < data.hazards.length; i++) {
+                    let h = data.hazards[i];
+                    let drawHazard = true;
+                    if (h.type === "gate") {
+                        let step = runtimeFrames % h.timing;
+                        drawHazard = step < (h.timing * 0.55);
+                    }
+                    if (drawHazard) {
+                        ctx.fillStyle = "#ef4444";
+                        ctx.fillRect(h.x, h.y, h.w, h.h);
+                        ctx.strokeStyle = "#ffb3b3";
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(h.x, h.y, h.w, h.h);
+                    }
+                }
+
+                for (let i = 0; i < data.items.length; i++) {
+                    let gold = data.items[i];
+                    if (gold.active) {
+                        ctx.save();
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = "#dfb75c";
+                        ctx.fillStyle = "#dfb75c";
+                        ctx.fillRect(gold.x + 6, gold.y, 8, 20);
+                        ctx.fillRect(gold.x, gold.y + 6, 20, 8);
+                        ctx.restore();
+                    }
+                }
+
+                let dx = (player.x + player.w / 2) - (data.goal.x + 12);
+                let dy = (player.y + player.h / 2) - (data.goal.y + 12);
+                let distance = Math.sqrt(dx * dx + dy * dy);
+                let pulseRadius = 18 + Math.sin(runtimeFrames * 0.08) * 4;
+
+                ctx.save();
+                let glowGrad = ctx.createRadialGradient(data.goal.x + 12, data.goal.y + 12, 0, data.goal.x + 12, data.goal.y + 12, pulseRadius * 3);
+                glowGrad.addColorStop(0, "rgba(0, 255, 162, 1)");
+                glowGrad.addColorStop(0.4, "rgba(0, 255, 162, 0.4)");
+                glowGrad.addColorStop(1, "rgba(0, 255, 162, 0)");
+                
+                ctx.fillStyle = glowGrad;
+                ctx.beginPath();
+                ctx.arc(data.goal.x + 12, data.goal.y + 12, pulseRadius * 3, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = "#ffffff";
+                ctx.beginPath();
+                ctx.arc(data.goal.x + 12, data.goal.y + 12, pulseRadius / 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+
+                renderGatsbySprite(ctx, player.x, player.y, player.w, player.h, runtimeFrames, player.vx);
+
+                ctx.fillStyle = "rgba(4, 6, 14, 0.95)";
+                ctx.fillRect(0, 0, canvas.width, 60);
+                ctx.strokeStyle = "rgba(223, 183, 92, 0.6)";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(0, 0, canvas.width, 60);
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "bold 13px sans-serif";
+                ctx.textAlign = "left";
+                ctx.fillText(data.name.toUpperCase(), 20, 25);
+                ctx.fillStyle = "#94a3b8";
+                ctx.font = "italic 13px Georgia, serif";
+                ctx.fillText(data.hint, 20, 45);
+
+                ctx.fillStyle = "#dfb75c";
+                ctx.font = "bold 15px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText("WEALTH: $" + wealthScore, canvas.width / 2 - 20, 35);
+
+                ctx.fillStyle = "#ef4444";
+                ctx.textAlign = "right";
+                let lifeIndicatorStr = "";
+                for(let l=0; l<lives; l++) lifeIndicatorStr += "♥ ";
+                ctx.font = "18px sans-serif";
+                ctx.fillText(lifeIndicatorStr, canvas.width - 150, 38);
+
+                ctx.fillStyle = "#2d161a";
+                ctx.fillRect(canvas.width - 130, 22, 110, 16);
+                ctx.fillStyle = "#ef4444";
+                ctx.fillRect(canvas.width - 130, 22, (energyReserve / MAX_ENERGY) * 110, 16);
+
+                if (touchControlsActive) {
+                    let drawPadBtn = function(b, activeState, text) {
+                        ctx.fillStyle = activeState ? "rgba(223, 183, 92, 0.5)" : "rgba(255, 255, 255, 0.1)";
+                        ctx.fillRect(b.x, b.y, b.w, b.h);
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+                        ctx.strokeRect(b.x, b.y, b.w, b.h);
+                        ctx.fillStyle = "#ffffff";
+                        ctx.font = "bold 12px sans-serif";
+                        ctx.textAlign = "center";
+                        ctx.fillText(text, b.x + b.w / 2, b.y + b.h / 2 + 5);
+                    };
+                    drawPadBtn(padLeft, touchLeft, "LEFT");
+                    drawPadBtn(padRight, touchRight, "RIGHT");
+                    drawPadBtn(padJump, touchJump, "JUMP");
+                }
+            }
+            requestAnimationFrame(loop);
+        }
+
+        loadMapIndex(0);
+        loop();
+    });
+    </script>
+</body>
+</html>
